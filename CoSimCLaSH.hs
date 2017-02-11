@@ -23,15 +23,13 @@ module CoSimCLaSH
 ---- IMPORTS --------------
 ---------------------------
 
+import CoSimTypes
+import CoSimTypesExt
+
 -- Haskell  
-import qualified Prelude as P
-import qualified Data.List as L
+import Prelude
+import Data.List
 import Data.Maybe
-
-
--- CLaSH
-import CLaSH.Prelude
-import CLaSH.Signal.Explicit
 
 -- FFI
 import Foreign 
@@ -72,9 +70,7 @@ foreign import ccall "writeToFile"      c_writeToFile   :: CString -> IO CString
 -- (HDL, Period, ResetFase, Data, Files, Enable StdOut)
 type CoSimSettings          = (Int, Int, Bool, String, [String], Bool)
 type CoSimSettings'         = (CoSimSettings, CoSimulator, String)
-type CLaSHType a            = (BitPack a, KnownNat (BitSize a), KnownNat (BitSize a + 1), KnownNat (BitSize a + 2))
 
-type SignalStream           = [[Int32]]
 data CoSimulator            = Icarus | ModelSim deriving (Show, Eq)
 
 --------------------------------------
@@ -105,9 +101,6 @@ createQuasiQuoter' f        = QuasiQuoter
 ---- Help-Functions ------------------
 --------------------------------------
 
-bool2Num False              = fromIntegral 0
-bool2Num True               = fromIntegral 1
-
 sim2Num Icarus              = fromIntegral 1
 sim2Num ModelSim            = fromIntegral 2
 
@@ -115,11 +108,11 @@ transposeList ::(Eq a, Num b, Eq b) => b -> [[a]] -> [[a]]
 transposeList 0 _           = []
 transposeList n xss         = ys : transposeList (n-1) yss
     where 
-        ys                  = P.map P.head xss
-        yss                 = P.map P.tail xss
+        ys                  = map head xss
+        yss                 = map tail xss
 
 mapAccumLM :: (acc -> x -> IO (acc, y)) -> acc -> [x] -> IO (acc, [y])        
-mapAccumLM f s xs           = return $ L.mapAccumL (\a xs -> unsafePerformIO $ f a xs) s xs
+mapAccumLM f s xs           = return $ mapAccumL (\a xs -> unsafePerformIO $ f a xs) s xs
   
 --------------------------------------
 ---- Array Marshalling ---------------
@@ -153,11 +146,11 @@ coSimDisableStdOut settings = (a,b,c,d,e,False)
     where (a,b,c,d,e,_)     = settings
 
 coSimWithFiles :: CoSimSettings -> [String] -> CoSimSettings
-coSimWithFiles settings fs  = (a,b,c,d,(P.++) e fs,f)
+coSimWithFiles settings fs  = (a,b,c,d,(++) e fs,f)
     where (a,b,c,d,e,f)     = settings
 
 coSimSeq :: CoSimSettings -> (Int,Bool) -> [String] -> CoSimSettings
-coSimSeq set (p,rst) fs'    = (hdl, fromIntegral p, rst, m, (P.++) fs fs', stdOut)
+coSimSeq set (p,rst) fs'    = (hdl, fromIntegral p, rst, m, (++) fs fs', stdOut)
         where 
             (hdl, _, _, m, fs, stdOut) = set 
 
@@ -179,7 +172,7 @@ coSimMarshall settings xs = do
         
         -- topEntity & settings
         c_topEntity         <- newCString top
-        c_settingsPtr       <- newArray $ P.map fromIntegral $ c_settingsf c_files
+        c_settingsPtr       <- newArray $ map fromIntegral $ c_settingsf c_files
         
         -- return
         return (c, c_settingsPtr, c_topEntity, c_filePtrs)
@@ -188,9 +181,9 @@ coSimMarshall settings xs = do
         (set,sim,top)       = settings
         (a, b, c, m, d, e)  = set --(HDL, Period, ResetFase, Data, Files, Enable StdOut)
         c_settingsf fs      = [sim2Num sim, a, b, rst, stdOut, lenf fs, lenf xs]
-        lenf                = P.length
-        rst                 = bool2Num c
-        stdOut              = bool2Num e
+        lenf                = length
+        rst                 = if c then 1 else 0
+        stdOut              = if e then 1 else 0
 
 --------------------------------------
 ---- Co-Simulation START -------------
@@ -219,14 +212,14 @@ coSimStart settings xs  = unsafePerformIO $ do
         -- transpose and return
         return $ transposeList c_oLength ys
     where
-        f r | r             = ([]:) . L.transpose
-            | otherwise     = L.transpose
+        f r | r             = ([]:) . transpose
+            | otherwise     = transpose
 
 --------------------------------------
 ---- Co-Simulation STEP --------------
 --------------------------------------
 
-coSimStep :: ForeignPtr a -> [[Int32]] -> IO (ForeignPtr a, [[Int32]])
+coSimStep :: ForeignPtr a -> SignalStream -> IO (ForeignPtr a, SignalStream)
 coSimStep state xs          = do
         
         -- write input
@@ -249,7 +242,7 @@ coSimStep state xs          = do
 ---- Co-Simulation INPUT OUTPUT ------
 --------------------------------------
         
-coSimInput :: ForeignPtr a -> [[Int32]] -> IO ()
+coSimInput :: ForeignPtr a -> SignalStream -> IO ()
 coSimInput state xs         = do
 
     -- check sizes
@@ -262,14 +255,14 @@ coSimInput state xs         = do
     zipWithM_ pokeArray' c_inputPtrs xs'
     
     where
-        xs'                 = P.map (P.map fromIntegral) xs
-        f                   = not . and . P.zipWith (\x y -> ( x == 0 ) || ( x == y )) iSizes
-        iLength             = fromIntegral $ P.length xs
-        iSizes              = P.map (fromIntegral . P.length) xs
-        errStr ls           = P.concat ["Simulator expects ", show ls, " input words, but ", show iSizes, " given"]
+        xs'                 = map (map fromIntegral) xs
+        f                   = not . and . zipWith (\x y -> ( x == 0 ) || ( x == y )) iSizes
+        iLength             = fromIntegral $ length xs
+        iSizes              = map (fromIntegral . length) xs
+        errStr ls           = concat ["Simulator expects ", show ls, " input words, but ", show iSizes, " given"]
         
         
-coSimOutput :: ForeignPtr a -> IO [[Int32]]
+coSimOutput :: ForeignPtr a -> IO SignalStream
 coSimOutput state          = do
 
     -- read output   
@@ -279,44 +272,23 @@ coSimOutput state          = do
     ys                      <- zipWithM peekArray' c_oSizes c_outputPtrs
     
     -- convert and return
-    return $ P.map (P.map fromIntegral) ys
-
---------------------------------------
----- CONVERSION ----------------------
---------------------------------------
-
-wordPack    :: (Integral a, Bits a) => a -> [Int32]
-wordPack x 
-    | isJust size           = snd $ L.mapAccumR wordPack' x [1 .. wordSize]
-    | otherwise             = error "Value does not have a fixed bitsize"
-    where   
-        size                = bitSizeMaybe x
-        wordSize            = 1 + shiftR (fromJust size - 1) 5
-
-wordUnpack  :: (Integral a, Bits a) => [Int32] -> a
-wordUnpack                  = P.foldl wordUnpack' 0
-
-wordPack'   :: (Integral a, Bits a) => a -> b -> (a, Int32)
-wordPack' x _               = (shiftR x 32, fromIntegral x)
-
-wordUnpack' :: (Integral a, Bits a) => a -> Int32 -> a
-wordUnpack' x y             = (shiftL x 32) .|. (4294967295 .&. (fromIntegral y))
+    return $ map (map fromIntegral) ys
 
 --------------------------------------
 ---- PARSING -------------------------
 --------------------------------------
 
-parseInput :: CoSimType t => [SignalStream] -> t -> [SignalStream]
+parseInput :: CoSimStream t => [SignalStream] -> t -> [SignalStream]
 parseInput xs x                 = toSignalStream x : xs
 
-parseOutput :: CoSimType t => ([SignalStream] -> [SignalStream]) -> Bool -> [SignalStream] -> ([SignalStream], t)
+parseOutput :: CoSimStream t => ([SignalStream] -> [SignalStream]) -> Bool -> [SignalStream] -> ([SignalStream], t)
 parseOutput f u xs           
         | qs == []              = error "Simulator expects less output ports"
         | otherwise             = (ys, fromSignalStream y)
         where 
             (y:ys)              = qs
             qs      | u         = xs
-                    | otherwise = f $ P.reverse xs
+                    | otherwise = f $ reverse xs
                                 
 --------------------------------------
 ---- POLYVARIDIC ---------------------
@@ -334,19 +306,19 @@ class CoSim r where
 ---- Instances Definitions -----------
 --------------------------------------
 
-instance {-# OVERLAPPABLE #-} CoSimType t => CoSim t where
+instance {-# OVERLAPPABLE #-} CoSimStream t => CoSim t where
     coSim' s u xs           
         | ys == []              = y'
         | otherwise             = error "Simulator expects more output ports"
         where (ys, y')          = parseOutput (coSimStart s) u xs
              
-instance {-# OVERLAPPING #-} (CoSimType t, CoSim r) => CoSim (t, r) where
+instance {-# OVERLAPPING #-} (CoSimStream t, CoSim r) => CoSim (t, r) where
     coSim' s u xs               = (y', y'')
         where 
             (ys, y')            = parseOutput (coSimStart s) u xs
             y''                 = coSim' s True ys
                     
-instance {-# OVERLAPPING #-} (CoSimType t, CoSim r) => CoSim (t -> r) where
+instance {-# OVERLAPPING #-} (CoSimStream t, CoSim r) => CoSim (t -> r) where
     coSim' s u xs               = coSim' s u . parseInput xs
            
 --------------------------------------
@@ -361,35 +333,6 @@ instance {-# OVERLAPPING #-} CoSim (a,(b,c,r)) => CoSim (a,b,c,r) where
             
 instance {-# OVERLAPPING #-} CoSim (a,(b,c,d,r)) => CoSim (a,b,c,d,r) where
     coSim' s u                  = (\(a,(b,c,d,r)) -> (a,b,c,d,r)) . coSim' s u
-
---------------------------------------
----- SUPPORTED TYPES -----------------
---------------------------------------      
-        
-class CoSimType t where
-
---------------------------------------
----- Func Definitions ----------------
---------------------------------------
-
-    toSignalStream   :: t -> SignalStream
-    fromSignalStream :: SignalStream -> t
-
---------------------------------------
----- Instances Definitions -----------
---------------------------------------
-
-instance {-# OVERLAPPABLE #-} CLaSHType a => CoSimType a  where
-    toSignalStream          = (:[]) . wordPack . pack
-    fromSignalStream        = unpack . wordUnpack . P.head
-
-instance {-# OVERLAPPING #-} CLaSHType a => CoSimType (Signal' clk a) where
-    toSignalStream          = P.map (wordPack . pack) . sample
-    fromSignalStream        = fromList . P.map (unpack . wordUnpack)
-    
-instance {-# OVERLAPPING #-} (Integral a, Bits a) => CoSimType [a] where
-    toSignalStream          = P.map wordPack
-    fromSignalStream        = P.map wordUnpack
 
 
 
