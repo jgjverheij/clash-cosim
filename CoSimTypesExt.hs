@@ -9,6 +9,7 @@ module CoSimTypesExt where
 
 -- Haskell  
 import CoSimTypes
+import Control.DeepSeq
 
 -- CLaSH
 import CLaSH.Prelude
@@ -30,7 +31,7 @@ instance (    BitPack (rep (int + frac))
 ---- SUPPORTED TYPES - STREAM --------
 --------------------------------------
 
-instance CoSimWords a => CoSimStream (Signal' clk a) where
+instance (CoSimWords a, NFData a) => CoSimStream (Signal' clk a) where
 
     toSignalStream          = toSignalStream . sample
     fromSignalStream        = fromList . fromSignalStream

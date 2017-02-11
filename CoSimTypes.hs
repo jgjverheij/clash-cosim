@@ -71,8 +71,8 @@ instance {-# OVERLAPPABLE #-} CoSimWords a => CoSimStream a where
 
 instance CoSimWords a => CoSimStream [a] where
 
-    toSignalStream          = Prelude.map wordPack
-    fromSignalStream        = Prelude.map wordUnpack
+    toSignalStream          = map wordPack
+    fromSignalStream        = map wordUnpack
 
 
 

@@ -18,7 +18,7 @@ libcosim_clash.so: cosim_clash.c
 	$(CC) $(CFLAGS) -shared -o libcosim_clash.so cosim_clash.o
 
 clash: cosim_vpi.vpi libcosim_clash.so CoSimCLaSH.hs CoSimTest.hs
-	$(CLASH) CoSimTest.hs CoSimCLaSH.hs -lcosim_clash -L.
+	$(CLASH) CoSimTest.hs CoSimCLaSH.hs  -lcosim_clash -L.
 
 # remove created files
 clean:
